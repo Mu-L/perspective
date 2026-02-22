@@ -85,7 +85,7 @@ test.describe("DuckDB Virtual Server", function () {
     test.describe("client", () => {
         test("get_hosted_table_names()", async function () {
             const tables = await client.get_hosted_table_names();
-            expect(tables).toContain("memory.superstore");
+            expect(tables).toEqual(["memory.superstore"]);
         });
     });
 
@@ -93,31 +93,57 @@ test.describe("DuckDB Virtual Server", function () {
         test("schema()", async function () {
             const table = await client.open_table("memory.superstore");
             const schema = await table.schema();
-            expect(schema).toHaveProperty("Sales");
-            expect(schema).toHaveProperty("Profit");
-            expect(schema).toHaveProperty("State");
-            expect(schema).toHaveProperty("Quantity");
-            expect(schema).toHaveProperty("Discount");
-        });
-
-        test("schema() returns correct types", async function () {
-            const table = await client.open_table("memory.superstore");
-            const schema = await table.schema();
-            expect(schema["Sales"]).toBe("float");
-            expect(schema["Profit"]).toBe("float");
-            expect(schema["Quantity"]).toBe("integer");
-            expect(schema["State"]).toBe("string");
-            expect(schema["Order Date"]).toBe("date");
+            expect(schema).toEqual({
+                "Product Name": "string",
+                "Ship Date": "date",
+                City: "string",
+                "Row ID": "integer",
+                "Customer Name": "string",
+                Quantity: "integer",
+                Discount: "float",
+                "Sub-Category": "string",
+                Segment: "string",
+                Category: "string",
+                "Order Date": "date",
+                "Order ID": "string",
+                Sales: "float",
+                State: "string",
+                "Postal Code": "float",
+                Country: "string",
+                "Customer ID": "string",
+                "Ship Mode": "string",
+                Region: "string",
+                Profit: "float",
+                "Product ID": "string",
+            });
         });
 
         test("columns()", async function () {
             const table = await client.open_table("memory.superstore");
             const columns = await table.columns();
-            expect(columns).toContain("Sales");
-            expect(columns).toContain("Profit");
-            expect(columns).toContain("State");
-            expect(columns).toContain("Region");
-            expect(columns).toContain("Category");
+            expect(columns).toEqual([
+                "Row ID",
+                "Order ID",
+                "Order Date",
+                "Ship Date",
+                "Ship Mode",
+                "Customer ID",
+                "Customer Name",
+                "Segment",
+                "Country",
+                "City",
+                "State",
+                "Postal Code",
+                "Region",
+                "Product ID",
+                "Category",
+                "Sub-Category",
+                "Product Name",
+                "Sales",
+                "Quantity",
+                "Discount",
+                "Profit",
+            ]);
         });
 
         test("size()", async function () {
@@ -166,10 +192,14 @@ test.describe("DuckDB Virtual Server", function () {
             const view = await table.view({
                 columns: ["Sales", "Quantity"],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 3 });
-            expect(json.length).toBe(3);
-            expect(json[0]).toHaveProperty("Sales");
-            expect(json[0]).toHaveProperty("Quantity");
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 261.96, Quantity: 2 },
+                { Sales: 731.94, Quantity: 3 },
+                { Sales: 14.62, Quantity: 2 },
+                { Sales: 957.5775, Quantity: 5 },
+                { Sales: 22.368, Quantity: 2 },
+            ]);
             await view.delete();
         });
 
@@ -180,12 +210,12 @@ test.describe("DuckDB Virtual Server", function () {
             });
             const columns = await view.to_columns({
                 start_row: 0,
-                end_row: 3,
+                end_row: 5,
             });
-            expect(columns).toHaveProperty("Sales");
-            expect(columns).toHaveProperty("Quantity");
-            expect(columns["Sales"].length).toBe(3);
-            expect(columns["Quantity"].length).toBe(3);
+            expect(columns).toEqual({
+                Sales: [261.96, 731.94, 14.62, 957.5775, 22.368],
+                Quantity: [2, 3, 2, 5, 2],
+            });
             await view.delete();
         });
 
@@ -209,10 +239,21 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Sales: "sum" },
             });
             const numRows = await view.num_rows();
-            expect(numRows).toBe(5); // 4 regions + 1 total row
+            expect(numRows).toBe(5);
             const json = await view.to_json();
-            expect(json[0]).toHaveProperty("__ROW_PATH__");
-            expect(json[0]["__ROW_PATH__"]).toEqual([]);
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Sales: 2297200.860299955 },
+                {
+                    __ROW_PATH__: ["Central"],
+                    Sales: 501239.8908000005,
+                },
+                { __ROW_PATH__: ["East"], Sales: 678781.2399999979 },
+                {
+                    __ROW_PATH__: ["South"],
+                    Sales: 391721.9050000003,
+                },
+                { __ROW_PATH__: ["West"], Sales: 725457.8245000006 },
+            ]);
             await view.delete();
         });
 
@@ -224,13 +265,67 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Sales: "sum" },
             });
             const json = await view.to_json();
-            // First row should be total
-            expect(json[0]["__ROW_PATH__"]).toEqual([]);
-            // Should have region-level rows and region+category rows
-            const regionRows = json.filter(
-                (row) => row["__ROW_PATH__"].length === 1,
-            );
-            expect(regionRows.length).toBe(4); // 4 regions
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Sales: 2297200.860299955 },
+                {
+                    __ROW_PATH__: ["Central"],
+                    Sales: 501239.8908000005,
+                },
+                {
+                    __ROW_PATH__: ["Central", "Furniture"],
+                    Sales: 163797.16380000004,
+                },
+                {
+                    __ROW_PATH__: ["Central", "Office Supplies"],
+                    Sales: 167026.41500000027,
+                },
+                {
+                    __ROW_PATH__: ["Central", "Technology"],
+                    Sales: 170416.3119999999,
+                },
+                { __ROW_PATH__: ["East"], Sales: 678781.2399999979 },
+                {
+                    __ROW_PATH__: ["East", "Furniture"],
+                    Sales: 208291.20400000009,
+                },
+                {
+                    __ROW_PATH__: ["East", "Office Supplies"],
+                    Sales: 205516.0549999999,
+                },
+                {
+                    __ROW_PATH__: ["East", "Technology"],
+                    Sales: 264973.9810000003,
+                },
+                {
+                    __ROW_PATH__: ["South"],
+                    Sales: 391721.9050000003,
+                },
+                {
+                    __ROW_PATH__: ["South", "Furniture"],
+                    Sales: 117298.6840000001,
+                },
+                {
+                    __ROW_PATH__: ["South", "Office Supplies"],
+                    Sales: 125651.31299999992,
+                },
+                {
+                    __ROW_PATH__: ["South", "Technology"],
+                    Sales: 148771.9079999999,
+                },
+                { __ROW_PATH__: ["West"], Sales: 725457.8245000006 },
+                {
+                    __ROW_PATH__: ["West", "Furniture"],
+                    Sales: 252612.7435000003,
+                },
+                {
+                    __ROW_PATH__: ["West", "Office Supplies"],
+                    Sales: 220853.24900000007,
+                },
+                {
+                    __ROW_PATH__: ["West", "Technology"],
+                    Sales: 251991.83199999997,
+                },
+            ]);
             await view.delete();
         });
 
@@ -242,8 +337,13 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Sales: "count" },
             });
             const json = await view.to_json();
-            // Total count should be 9994
-            expect(json[0]["Sales"]).toBe(9994);
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Sales: 9994 },
+                { __ROW_PATH__: ["Central"], Sales: 2323 },
+                { __ROW_PATH__: ["East"], Sales: 2848 },
+                { __ROW_PATH__: ["South"], Sales: 1620 },
+                { __ROW_PATH__: ["West"], Sales: 3203 },
+            ]);
             await view.delete();
         });
 
@@ -255,11 +355,21 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Sales: "avg" },
             });
             const json = await view.to_json();
-            expect(json.length).toBe(4); // 3 categories + total
-            // Each row should have an average value
-            for (const row of json) {
-                expect(typeof row["Sales"]).toBe("number");
-            }
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Sales: 229.8580008304938 },
+                {
+                    __ROW_PATH__: ["Furniture"],
+                    Sales: 349.83488698727007,
+                },
+                {
+                    __ROW_PATH__: ["Office Supplies"],
+                    Sales: 119.32410089611732,
+                },
+                {
+                    __ROW_PATH__: ["Technology"],
+                    Sales: 452.70927612344155,
+                },
+            ]);
             await view.delete();
         });
 
@@ -271,9 +381,13 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Quantity: "min" },
             });
             const json = await view.to_json();
-            for (const row of json) {
-                expect(typeof row["Quantity"]).toBe("number");
-            }
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Quantity: 1 },
+                { __ROW_PATH__: ["Central"], Quantity: 1 },
+                { __ROW_PATH__: ["East"], Quantity: 1 },
+                { __ROW_PATH__: ["South"], Quantity: 1 },
+                { __ROW_PATH__: ["West"], Quantity: 1 },
+            ]);
             await view.delete();
         });
 
@@ -285,9 +399,13 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Quantity: "max" },
             });
             const json = await view.to_json();
-            for (const row of json) {
-                expect(typeof row["Quantity"]).toBe("number");
-            }
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Quantity: 14 },
+                { __ROW_PATH__: ["Central"], Quantity: 14 },
+                { __ROW_PATH__: ["East"], Quantity: 14 },
+                { __ROW_PATH__: ["South"], Quantity: 14 },
+                { __ROW_PATH__: ["West"], Quantity: 14 },
+            ]);
             await view.delete();
         });
     });
@@ -303,11 +421,44 @@ test.describe("DuckDB Virtual Server", function () {
             });
 
             const columns = await view.column_paths();
-            // Should have columns for each region
-            expect(columns.some((c) => c.includes("Central"))).toBe(true);
-            expect(columns.some((c) => c.includes("East"))).toBe(true);
-            expect(columns.some((c) => c.includes("South"))).toBe(true);
-            expect(columns.some((c) => c.includes("West"))).toBe(true);
+            expect(columns).toEqual([
+                "Central_Sales",
+                "East_Sales",
+                "South_Sales",
+                "West_Sales",
+            ]);
+
+            const json = await view.to_json();
+            expect(json).toEqual([
+                {
+                    __ROW_PATH__: [],
+                    "Central|Sales": 501239.8908000005,
+                    "East|Sales": 678781.2399999979,
+                    "South|Sales": 391721.9050000003,
+                    "West|Sales": 725457.8245000006,
+                },
+                {
+                    __ROW_PATH__: ["Furniture"],
+                    "Central|Sales": 163797.16380000004,
+                    "East|Sales": 208291.20400000009,
+                    "South|Sales": 117298.6840000001,
+                    "West|Sales": 252612.7435000003,
+                },
+                {
+                    __ROW_PATH__: ["Office Supplies"],
+                    "Central|Sales": 167026.41500000027,
+                    "East|Sales": 205516.0549999999,
+                    "South|Sales": 125651.31299999992,
+                    "West|Sales": 220853.24900000007,
+                },
+                {
+                    __ROW_PATH__: ["Technology"],
+                    "Central|Sales": 170416.3119999999,
+                    "East|Sales": 264973.9810000003,
+                    "South|Sales": 148771.9079999999,
+                    "West|Sales": 251991.83199999997,
+                },
+            ]);
             await view.delete();
         });
 
@@ -332,10 +483,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "Region"],
                 filter: [["Region", "==", "West"]],
             });
-            const json = await view.to_json();
-            for (const row of json) {
-                expect(row["Region"]).toBe("West");
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 14.62, Region: "West" },
+                { Sales: 48.86, Region: "West" },
+                { Sales: 7.28, Region: "West" },
+                { Sales: 907.152, Region: "West" },
+                { Sales: 18.504, Region: "West" },
+            ]);
             await view.delete();
         });
 
@@ -345,10 +500,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "Region"],
                 filter: [["Region", "!=", "West"]],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 100 });
-            for (const row of json) {
-                expect(row["Region"]).not.toBe("West");
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 261.96, Region: "South" },
+                { Sales: 731.94, Region: "South" },
+                { Sales: 957.5775, Region: "South" },
+                { Sales: 22.368, Region: "South" },
+                { Sales: 15.552, Region: "South" },
+            ]);
             await view.delete();
         });
 
@@ -358,10 +517,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "Quantity"],
                 filter: [["Quantity", ">", 5]],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 100 });
-            for (const row of json) {
-                expect(row["Quantity"]).toBeGreaterThan(5);
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 48.86, Quantity: 7 },
+                { Sales: 907.152, Quantity: 6 },
+                { Sales: 1706.184, Quantity: 9 },
+                { Sales: 665.88, Quantity: 6 },
+                { Sales: 19.46, Quantity: 7 },
+            ]);
             await view.delete();
         });
 
@@ -371,10 +534,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "Quantity"],
                 filter: [["Quantity", "<", 3]],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 100 });
-            for (const row of json) {
-                expect(row["Quantity"]).toBeLessThan(3);
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 261.96, Quantity: 2 },
+                { Sales: 14.62, Quantity: 2 },
+                { Sales: 22.368, Quantity: 2 },
+                { Sales: 55.5, Quantity: 2 },
+                { Sales: 8.56, Quantity: 2 },
+            ]);
             await view.delete();
         });
 
@@ -384,10 +551,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "Quantity"],
                 filter: [["Quantity", ">=", 10]],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 100 });
-            for (const row of json) {
-                expect(row["Quantity"]).toBeGreaterThanOrEqual(10);
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 40.096, Quantity: 14 },
+                { Sales: 43.12, Quantity: 14 },
+                { Sales: 384.45, Quantity: 11 },
+                { Sales: 3347.37, Quantity: 13 },
+                { Sales: 100.24, Quantity: 10 },
+            ]);
             await view.delete();
         });
 
@@ -397,10 +568,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "Quantity"],
                 filter: [["Quantity", "<=", 2]],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 100 });
-            for (const row of json) {
-                expect(row["Quantity"]).toBeLessThanOrEqual(2);
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 261.96, Quantity: 2 },
+                { Sales: 14.62, Quantity: 2 },
+                { Sales: 22.368, Quantity: 2 },
+                { Sales: 55.5, Quantity: 2 },
+                { Sales: 8.56, Quantity: 2 },
+            ]);
             await view.delete();
         });
 
@@ -410,10 +585,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "State"],
                 filter: [["State", "LIKE", "Cal%"]],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 100 });
-            for (const row of json) {
-                expect(row["State"].startsWith("Cal")).toBe(true);
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 14.62, State: "California" },
+                { Sales: 48.86, State: "California" },
+                { Sales: 7.28, State: "California" },
+                { Sales: 907.152, State: "California" },
+                { Sales: 18.504, State: "California" },
+            ]);
             await view.delete();
         });
 
@@ -426,11 +605,14 @@ test.describe("DuckDB Virtual Server", function () {
                     ["Quantity", ">", 3],
                 ],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 100 });
-            for (const row of json) {
-                expect(row["Region"]).toBe("West");
-                expect(row["Quantity"]).toBeGreaterThan(3);
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 48.86, Region: "West", Quantity: 7 },
+                { Sales: 7.28, Region: "West", Quantity: 4 },
+                { Sales: 907.152, Region: "West", Quantity: 6 },
+                { Sales: 114.9, Region: "West", Quantity: 5 },
+                { Sales: 1706.184, Region: "West", Quantity: 9 },
+            ]);
             await view.delete();
         });
 
@@ -443,7 +625,23 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Sales: "sum" },
             });
             const numRows = await view.num_rows();
-            expect(numRows).toBe(4); // 3 categories + total
+            expect(numRows).toBe(4);
+            const json = await view.to_json();
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Sales: 725457.8245000006 },
+                {
+                    __ROW_PATH__: ["Furniture"],
+                    Sales: 252612.7435000003,
+                },
+                {
+                    __ROW_PATH__: ["Office Supplies"],
+                    Sales: 220853.24900000007,
+                },
+                {
+                    __ROW_PATH__: ["Technology"],
+                    Sales: 251991.83199999997,
+                },
+            ]);
             await view.delete();
         });
     });
@@ -455,12 +653,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "Quantity"],
                 sort: [["Sales", "asc"]],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 10 });
-            for (let i = 1; i < json.length; i++) {
-                expect(json[i]["Sales"]).toBeGreaterThanOrEqual(
-                    json[i - 1]["Sales"],
-                );
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 0.444, Quantity: 1 },
+                { Sales: 0.556, Quantity: 1 },
+                { Sales: 0.836, Quantity: 1 },
+                { Sales: 0.852, Quantity: 1 },
+                { Sales: 0.876, Quantity: 1 },
+            ]);
             await view.delete();
         });
 
@@ -470,12 +670,14 @@ test.describe("DuckDB Virtual Server", function () {
                 columns: ["Sales", "Quantity"],
                 sort: [["Sales", "desc"]],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 10 });
-            for (let i = 1; i < json.length; i++) {
-                expect(json[i]["Sales"]).toBeLessThanOrEqual(
-                    json[i - 1]["Sales"],
-                );
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 22638.48, Quantity: 6 },
+                { Sales: 17499.95, Quantity: 5 },
+                { Sales: 13999.96, Quantity: 4 },
+                { Sales: 11199.968, Quantity: 4 },
+                { Sales: 10499.97, Quantity: 3 },
+            ]);
             await view.delete();
         });
 
@@ -488,13 +690,19 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Sales: "sum" },
             });
             const json = await view.to_json();
-            // Skip the first row (total) and verify sorting
-            const regionRows = json.slice(1);
-            for (let i = 1; i < regionRows.length; i++) {
-                expect(regionRows[i]["Sales"]).toBeLessThanOrEqual(
-                    regionRows[i - 1]["Sales"],
-                );
-            }
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Sales: 2297200.860299955 },
+                { __ROW_PATH__: ["West"], Sales: 725457.8245000006 },
+                { __ROW_PATH__: ["East"], Sales: 678781.2399999979 },
+                {
+                    __ROW_PATH__: ["Central"],
+                    Sales: 501239.8908000005,
+                },
+                {
+                    __ROW_PATH__: ["South"],
+                    Sales: 391721.9050000003,
+                },
+            ]);
             await view.delete();
         });
 
@@ -507,18 +715,14 @@ test.describe("DuckDB Virtual Server", function () {
                     ["Sales", "desc"],
                 ],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 100 });
-            // Check that Region is sorted first
-            let lastRegion = "";
-            let lastSales = Infinity;
-            for (const row of json) {
-                if (row["Region"] !== lastRegion) {
-                    lastRegion = row["Region"];
-                    lastSales = Infinity;
-                }
-                expect(row["Sales"]).toBeLessThanOrEqual(lastSales);
-                lastSales = row["Sales"];
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Region: "Central", Sales: 17499.95, Quantity: 5 },
+                { Region: "Central", Sales: 9892.74, Quantity: 13 },
+                { Region: "Central", Sales: 9449.95, Quantity: 5 },
+                { Region: "Central", Sales: 8159.952, Quantity: 8 },
+                { Region: "Central", Sales: 5443.96, Quantity: 4 },
+            ]);
             await view.delete();
         });
     });
@@ -531,11 +735,14 @@ test.describe("DuckDB Virtual Server", function () {
                 expressions: { doublesales: '"Sales" * 2' },
             });
 
-            const json = await view.to_json({ start_row: 0, end_row: 10 });
-            for (const row of json) {
-                console.log(row);
-                expect(row["doublesales"]).toBeCloseTo(row["Sales"] * 2, 5);
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 261.96, doublesales: 523.92 },
+                { Sales: 731.94, doublesales: 1463.88 },
+                { Sales: 14.62, doublesales: 29.24 },
+                { Sales: 957.5775, doublesales: 1915.155 },
+                { Sales: 22.368, doublesales: 44.736 },
+            ]);
 
             await view.delete();
         });
@@ -547,15 +754,22 @@ test.describe("DuckDB Virtual Server", function () {
                 expressions: { margin: '"Profit" / "Sales"' },
             });
 
-            const json = await view.to_json({ start_row: 0, end_row: 10 });
-            for (const row of json) {
-                if (row["Sales"] !== 0) {
-                    expect(row["margin"]).toBeCloseTo(
-                        row["Profit"] / row["Sales"],
-                        5,
-                    );
-                }
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                {
+                    Sales: 261.96,
+                    Profit: 41.9136,
+                    margin: 0.16000000000000003,
+                },
+                { Sales: 731.94, Profit: 219.582, margin: 0.3 },
+                {
+                    Sales: 14.62,
+                    Profit: 6.8714,
+                    margin: 0.47000000000000003,
+                },
+                { Sales: 957.5775, Profit: -383.031, margin: -0.4 },
+                { Sales: 22.368, Profit: 2.5164, margin: 0.1125 },
+            ]);
 
             await view.delete();
         });
@@ -570,10 +784,19 @@ test.describe("DuckDB Virtual Server", function () {
             });
 
             const json = await view.to_json();
-            expect(json.length).toBe(5); // 4 regions + total
-            for (const row of json) {
-                expect(typeof row["total"]).toBe("number");
-            }
+            expect(json).toEqual([
+                { __ROW_PATH__: [], total: 2583597.882000014 },
+                {
+                    __ROW_PATH__: ["Central"],
+                    total: 540946.2532999996,
+                },
+                { __ROW_PATH__: ["East"], total: 770304.0199999991 },
+                {
+                    __ROW_PATH__: ["South"],
+                    total: 438471.33530000027,
+                },
+                { __ROW_PATH__: ["West"], total: 833876.2733999988 },
+            ]);
 
             await view.delete();
         });
@@ -585,8 +808,14 @@ test.describe("DuckDB Virtual Server", function () {
             const view = await table.view({
                 columns: ["Sales", "Profit"],
             });
-            const json = await view.to_json({ start_row: 10, end_row: 20 });
-            expect(json.length).toBe(10);
+            const json = await view.to_json({ start_row: 10, end_row: 15 });
+            expect(json).toEqual([
+                { Sales: 1706.184, Profit: 85.3092 },
+                { Sales: 911.424, Profit: 68.3568 },
+                { Sales: 15.552, Profit: 5.4432 },
+                { Sales: 407.976, Profit: 132.5922 },
+                { Sales: 68.81, Profit: -123.858 },
+            ]);
             await view.delete();
         });
 
@@ -601,21 +830,13 @@ test.describe("DuckDB Virtual Server", function () {
                 start_col: 1,
                 end_col: 3,
             });
-            expect(json.length).toBe(5);
-            // Should only have Profit and Quantity (columns 1 and 2)
-            expect(Object.keys(json[0]).sort()).toEqual(
-                ["Profit", "Quantity"].sort(),
-            );
-            await view.delete();
-        });
-
-        test("large viewport", async function () {
-            const table = await client.open_table("memory.superstore");
-            const view = await table.view({
-                columns: ["Sales"],
-            });
-            const json = await view.to_json({ start_row: 0, end_row: 1000 });
-            expect(json.length).toBe(1000);
+            expect(json).toEqual([
+                { Profit: 41.9136, Quantity: 2 },
+                { Profit: 219.582, Quantity: 3 },
+                { Profit: 6.8714, Quantity: 2 },
+                { Profit: -383.031, Quantity: 5 },
+                { Profit: 2.5164, Quantity: 2 },
+            ]);
             await view.delete();
         });
     });
@@ -626,10 +847,14 @@ test.describe("DuckDB Virtual Server", function () {
             const view = await table.view({
                 columns: ["Quantity"],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 10 });
-            for (const row of json) {
-                expect(Number.isInteger(row["Quantity"])).toBe(true);
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Quantity: 2 },
+                { Quantity: 3 },
+                { Quantity: 2 },
+                { Quantity: 5 },
+                { Quantity: 2 },
+            ]);
             await view.delete();
         });
 
@@ -638,11 +863,14 @@ test.describe("DuckDB Virtual Server", function () {
             const view = await table.view({
                 columns: ["Sales", "Profit"],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 10 });
-            for (const row of json) {
-                expect(typeof row["Sales"]).toBe("number");
-                expect(typeof row["Profit"]).toBe("number");
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { Sales: 261.96, Profit: 41.9136 },
+                { Sales: 731.94, Profit: 219.582 },
+                { Sales: 14.62, Profit: 6.8714 },
+                { Sales: 957.5775, Profit: -383.031 },
+                { Sales: 22.368, Profit: 2.5164 },
+            ]);
             await view.delete();
         });
 
@@ -651,12 +879,34 @@ test.describe("DuckDB Virtual Server", function () {
             const view = await table.view({
                 columns: ["Region", "State", "City"],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 10 });
-            for (const row of json) {
-                expect(typeof row["Region"]).toBe("string");
-                expect(typeof row["State"]).toBe("string");
-                expect(typeof row["City"]).toBe("string");
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                {
+                    Region: "South",
+                    State: "Kentucky",
+                    City: "Henderson",
+                },
+                {
+                    Region: "South",
+                    State: "Kentucky",
+                    City: "Henderson",
+                },
+                {
+                    Region: "West",
+                    State: "California",
+                    City: "Los Angeles",
+                },
+                {
+                    Region: "South",
+                    State: "Florida",
+                    City: "Fort Lauderdale",
+                },
+                {
+                    Region: "South",
+                    State: "Florida",
+                    City: "Fort Lauderdale",
+                },
+            ]);
             await view.delete();
         });
 
@@ -665,11 +915,14 @@ test.describe("DuckDB Virtual Server", function () {
             const view = await table.view({
                 columns: ["Order Date"],
             });
-            const json = await view.to_json({ start_row: 0, end_row: 10 });
-            for (const row of json) {
-                // Dates come as timestamps
-                expect(typeof row["Order Date"]).toBe("number");
-            }
+            const json = await view.to_json({ start_row: 0, end_row: 5 });
+            expect(json).toEqual([
+                { "Order Date": 1478563200000 },
+                { "Order Date": 1478563200000 },
+                { "Order Date": 1465689600000 },
+                { "Order Date": 1444521600000 },
+                { "Order Date": 1444521600000 },
+            ]);
             await view.delete();
         });
     });
@@ -685,14 +938,21 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { Sales: "sum" },
             });
             const json = await view.to_json();
-            expect(json.length).toBe(4); // 3 categories + total
-            // Skip total row and verify sorting
-            const categoryRows = json.slice(1);
-            for (let i = 1; i < categoryRows.length; i++) {
-                expect(categoryRows[i]["Sales"]).toBeLessThanOrEqual(
-                    categoryRows[i - 1]["Sales"],
-                );
-            }
+            expect(json).toEqual([
+                { __ROW_PATH__: [], Sales: 725457.8245000006 },
+                {
+                    __ROW_PATH__: ["Furniture"],
+                    Sales: 252612.7435000003,
+                },
+                {
+                    __ROW_PATH__: ["Technology"],
+                    Sales: 251991.83199999997,
+                },
+                {
+                    __ROW_PATH__: ["Office Supplies"],
+                    Sales: 220853.24900000007,
+                },
+            ]);
             await view.delete();
         });
 
@@ -705,10 +965,79 @@ test.describe("DuckDB Virtual Server", function () {
                 filter: [["Quantity", ">", 3]],
                 aggregates: { Sales: "sum" },
             });
+
             const paths = await view.column_paths();
-            expect(paths.length).toBeGreaterThan(0);
+            expect(paths).toEqual([
+                "Central_Sales",
+                "East_Sales",
+                "South_Sales",
+                "West_Sales",
+            ]);
+
             const numRows = await view.num_rows();
-            expect(numRows).toBe(3); // 3 categories + total
+            expect(numRows).toBe(4);
+
+            const json = await view.to_json();
+            expect(json).toEqual([
+                {
+                    __ROW_PATH__: [],
+                    "Central|Sales": 332883.0567999998,
+                    "East|Sales": 455143.735,
+                    "South|Sales": 274208.7699999999,
+                    "West|Sales": 470561.28350000136,
+                },
+                {
+                    __ROW_PATH__: ["Furniture"],
+                    "Central|Sales": 111457.73279999988,
+                    "East|Sales": 140376.95899999997,
+                    "South|Sales": 80859.618,
+                    "West|Sales": 165219.5734999998,
+                },
+                {
+                    __ROW_PATH__: ["Office Supplies"],
+                    "Central|Sales": 103937.78599999992,
+                    "East|Sales": 135823.893,
+                    "South|Sales": 84393.3579999999,
+                    "West|Sales": 140206.93099999975,
+                },
+                {
+                    __ROW_PATH__: ["Technology"],
+                    "Central|Sales": 117487.53800000002,
+                    "East|Sales": 178942.883,
+                    "South|Sales": 108955.79400000005,
+                    "West|Sales": 165134.77900000007,
+                },
+            ]);
+            await view.delete();
+        });
+
+        test("split_by only", async function () {
+            const table = await client.open_table("memory.superstore");
+            const view = await table.view({
+                columns: ["Sales"],
+                split_by: ["Region"],
+                filter: [["Quantity", ">", 3]],
+            });
+
+            const paths = await view.column_paths();
+            expect(paths).toEqual([
+                "Central_Sales",
+                "East_Sales",
+                "South_Sales",
+                "West_Sales",
+            ]);
+
+            const numRows = await view.num_rows();
+            expect(numRows).toBe(4284);
+            const json = await view.to_json({ start_row: 0, end_row: 1 });
+            expect(json).toEqual([
+                {
+                    "Central|Sales": null,
+                    "East|Sales": null,
+                    "South|Sales": 957.5775,
+                    "West|Sales": null,
+                },
+            ]);
             await view.delete();
         });
 
@@ -722,14 +1051,28 @@ test.describe("DuckDB Virtual Server", function () {
                 aggregates: { profitmargin: "avg" },
             });
             const json = await view.to_json();
-            expect(json.length).toBe(5); // 4 regions + total
-            // Verify sorting on region rows
-            const regionRows = json.slice(1);
-            for (let i = 1; i < regionRows.length; i++) {
-                expect(regionRows[i]["profitmargin"]).toBeLessThanOrEqual(
-                    regionRows[i - 1]["profitmargin"],
-                );
-            }
+            expect(json).toEqual([
+                {
+                    __ROW_PATH__: [],
+                    profitmargin: 12.031392972104467,
+                },
+                {
+                    __ROW_PATH__: ["West"],
+                    profitmargin: 21.948661793784012,
+                },
+                {
+                    __ROW_PATH__: ["East"],
+                    profitmargin: 16.722695960406636,
+                },
+                {
+                    __ROW_PATH__: ["South"],
+                    profitmargin: 16.35190329218107,
+                },
+                {
+                    __ROW_PATH__: ["Central"],
+                    profitmargin: -10.407293926323575,
+                },
+            ]);
             await view.delete();
         });
     });

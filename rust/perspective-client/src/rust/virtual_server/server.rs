@@ -91,7 +91,7 @@ impl<T: VirtualServerHandler> VirtualServer<T> {
                 tracing::error!("{}", err);
                 Ok(respond!(msg, ServerError {
                     message: err.to_string(),
-                    status_code: 1
+                    status_code: 0
                 }))
             },
         }

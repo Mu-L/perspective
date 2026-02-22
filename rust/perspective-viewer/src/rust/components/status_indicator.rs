@@ -164,6 +164,9 @@ impl Reducible for StatusIconState {
                 StatusIconStateAction::Increment | StatusIconStateAction::Decrement,
             ) => StatusIconState::Loading,
             (_, StatusIconStateAction::Increment) => Self::Updating(1),
+            (StatusIconState::Errored(x, y, z), _) => {
+                StatusIconState::Errored(x.clone(), y.clone(), z)
+            },
             (_, StatusIconStateAction::Decrement) => StatusIconState::Normal,
         };
 

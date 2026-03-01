@@ -90,12 +90,7 @@ where
     Result<T, JsValue>: IntoJsResult + 'static,
 {
     fn from(fut: ApiFuture<T>) -> Self {
-        future_to_promise(async move {
-            match fut.0.await.ignore_view_delete()? {
-                Some(x) => Ok(x).into_js_result(),
-                None => Err("View not found".into()).into_js_result(),
-            }
-        })
+        future_to_promise(async move { Ok(fut.0.await?).into_js_result() })
     }
 }
 

@@ -76,41 +76,47 @@ const FILTER_OPS = [
 ];
 
 function duckdbTypeToPsp(name: string): ColumnType {
-    if (name === "VARCHAR" || name == "Utf8") {
+    name = name.toLowerCase();
+    if (name === "varchar" || name == "utf8") {
         return "string";
     }
 
     if (
-        name === "DOUBLE" ||
-        name === "BIGINT" ||
-        name === "HUGEINT" ||
-        name === "Float64" ||
-        name.startsWith("Decimal")
+        name === "double" ||
+        name === "bigint" ||
+        name === "hugeint" ||
+        name === "float64" ||
+        name.startsWith("decimal")
     ) {
         return "float";
     }
 
-    if (name.startsWith("Int") || name == "INTEGER") {
+    if (name.startsWith("int")) {
         return "integer";
     }
 
-    if (name === "INTEGER") {
-        return "integer";
-    }
-
-    if (name === "DATE" || name.startsWith("Date")) {
+    if (name.startsWith("date")) {
         return "date";
     }
 
-    if (name === "BOOLEAN" || name === "Bool") {
+    if (name.startsWith("bool")) {
         return "boolean";
     }
 
-    if (name === "TIMESTAMP" || name.startsWith("Timestamp")) {
+    if (name.startsWith("timestamp")) {
         return "datetime";
     }
 
-    throw new Error(`Unknown type '${name}'`);
+    if (name.startsWith("json")) {
+        return "string";
+    }
+
+    if (name.startsWith("struct")) {
+        return "string";
+    }
+
+    console.warn(`Unknown type '${name}'`);
+    return "string";
 }
 
 function convertDecimalToNumber(value: any, dtypeString: string) {
@@ -250,12 +256,9 @@ export class DuckDBHandler implements perspective.VirtualServerHandler {
     async viewColumnSize(viewId: string, config: ViewConfig) {
         const query = this.sqlBuilder.viewColumnSize(viewId);
         const results = await runQuery(this.db, query);
-        const gs = config.group_by?.length || 0;
         const count = Number(Object.values(results[0].toJSON())[0]);
-        return (
-            count -
-            (gs === 0 ? 0 : gs + (config.split_by?.length === 0 ? 1 : 0))
-        );
+        const gs = config.group_by?.length || 0;
+        return count - (gs === 0 ? 0 : gs + 1);
     }
 
     async tableSize(tableId: string) {
@@ -306,18 +309,17 @@ export class DuckDBHandler implements perspective.VirtualServerHandler {
         });
 
         for (let cidx = 0; cidx < columns.length; cidx++) {
-            if (cidx === 0 && is_group_by && !is_split_by) {
+            if (cidx === 0 && is_group_by) {
                 // This is the grouping_id column, skip it
                 continue;
             }
 
             let col = columns[cidx];
-            if (is_split_by && !col.startsWith("__ROW_PATH_")) {
+            if (is_split_by && !col.startsWith("__")) {
                 col = col.replaceAll("_", "|");
             }
 
             const dtype = duckdbTypeToPsp(dtypes[cidx]) as ColumnType;
-
             const isDecimal = dtypes[cidx].startsWith("Decimal");
             for (let ridx = 0; ridx < rows.length; ridx++) {
                 const rowArray = rows[ridx].toArray();
@@ -329,6 +331,14 @@ export class DuckDBHandler implements perspective.VirtualServerHandler {
 
                 if (typeof value === "bigint") {
                     value = Number(value);
+                }
+
+                if (typeof value !== "string" && dtype === "string") {
+                    try {
+                        value = JSON.stringify(value);
+                    } catch (e) {
+                        value = `${value}`;
+                    }
                 }
 
                 dataSlice.setCol(dtype, col, ridx, value, grouping_id);

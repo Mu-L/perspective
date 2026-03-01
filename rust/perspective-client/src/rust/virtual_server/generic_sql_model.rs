@@ -33,13 +33,19 @@
 // - Would like to add a metadata API so that e.g. Viewer debug panel could show
 //   internal generated SQL.
 
+mod table_make_view;
+
+#[cfg(test)]
+mod tests;
+
 use std::fmt;
 
 use indexmap::IndexMap;
 use serde::Deserialize;
 
-use crate::config::{Aggregate, FilterTerm, Scalar, Sort, SortDir, ViewConfig};
+use crate::config::{FilterTerm, Scalar, Sort, SortDir, ViewConfig};
 use crate::proto::{ColumnType, ViewPort};
+use crate::virtual_server::generic_sql_model::table_make_view::ViewQueryContext;
 
 /// Error type for SQL generation operations.
 #[derive(Debug, Clone)]
@@ -83,7 +89,6 @@ pub struct GenericSQLVirtualServerModel(GenericSQLVirtualServerModelArgs);
 impl GenericSQLVirtualServerModel {
     /// Creates a new `GenericSQLVirtualServerModel` instance.
     pub fn new(args: GenericSQLVirtualServerModelArgs) -> Self {
-        tracing::error!("{:?}", args);
         Self(args)
     }
 
@@ -175,201 +180,8 @@ impl GenericSQLVirtualServerModel {
         view_id: &str,
         config: &ViewConfig,
     ) -> GenericSQLResult<String> {
-        let columns = &config.columns;
-        let group_by = &config.group_by;
-        let split_by = &config.split_by;
-        let aggregates = &config.aggregates;
-        let sort = &config.sort;
-        let expressions = &config.expressions.0;
-        let filter = &config.filter;
-
-        let col_name = |col: &str| -> String {
-            expressions
-                .get(col)
-                .cloned()
-                .unwrap_or_else(|| format!("\"{}\"", col))
-        };
-
-        let get_aggregate = |col: &str| -> Option<&Aggregate> { aggregates.get(col) };
-        let generate_select_clauses = || -> Vec<String> {
-            let mut clauses = Vec::new();
-
-            if !group_by.is_empty() {
-                for col in columns.iter().flatten() {
-                    let agg = get_aggregate(col)
-                        .map(Self::aggregate_to_string)
-                        .unwrap_or_else(|| "any_value".to_string());
-                    clauses.push(format!(
-                        "{}({}) as \"{}\"",
-                        agg,
-                        col_name(col),
-                        col.replace('"', "\"\"").replace("_", "-")
-                    ));
-                }
-
-                if split_by.is_empty() {
-                    for (idx, gb_col) in group_by.iter().enumerate() {
-                        clauses.push(format!("{} as __ROW_PATH_{}__", col_name(gb_col), idx));
-                    }
-
-                    let groups = group_by.iter().map(|c| col_name(c)).collect::<Vec<_>>();
-                    let grouping_fn = self.0.grouping_fn.as_deref().unwrap_or("GROUPING_ID");
-                    clauses.push(format!(
-                        "{}({}) AS __GROUPING_ID__",
-                        grouping_fn,
-                        groups.join(", ")
-                    ));
-                }
-            } else if !columns.is_empty() {
-                for col in columns.iter().flatten() {
-                    let escaped_col = col.replace('"', "\"\"").replace("_", "-");
-                    clauses.push(format!("{} as \"{}\"", col_name(col), escaped_col));
-                }
-            }
-
-            clauses
-        };
-
-        let mut order_by_clauses: Vec<String> = Vec::new();
-        let mut window_clauses: Vec<String> = Vec::new();
-        let mut where_clauses: Vec<String> = Vec::new();
-
-        if !group_by.is_empty() {
-            for gidx in 0..group_by.len() {
-                let groups = group_by[..=gidx]
-                    .iter()
-                    .map(|c| col_name(c))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                if split_by.is_empty() {
-                    let grouping_fn = self.0.grouping_fn.as_deref().unwrap_or("GROUPING_ID");
-                    order_by_clauses.push(format!("{}({}) DESC", grouping_fn, groups));
-                }
-
-                for Sort(sort_col, sort_dir) in sort {
-                    if *sort_dir != SortDir::None {
-                        let agg = get_aggregate(sort_col)
-                            .map(Self::aggregate_to_string)
-                            .unwrap_or_else(|| "any_value".to_string());
-                        let dir_str = Self::sort_dir_to_string(sort_dir);
-
-                        if gidx >= group_by.len() - 1 {
-                            order_by_clauses.push(format!(
-                                "{}({}) {}",
-                                agg,
-                                col_name(sort_col),
-                                dir_str
-                            ));
-                        } else {
-                            order_by_clauses.push(format!(
-                                "first({}({})) OVER __WINDOW_{}__ {}",
-                                agg,
-                                col_name(sort_col),
-                                gidx,
-                                dir_str
-                            ));
-                        }
-                    }
-                }
-
-                order_by_clauses.push(format!("__ROW_PATH_{}__ ASC", gidx));
-            }
-        } else {
-            for Sort(sort_col, sort_dir) in sort {
-                if *sort_dir != SortDir::None {
-                    let dir_str = Self::sort_dir_to_string(sort_dir);
-                    order_by_clauses.push(format!("{} {}", col_name(sort_col), dir_str));
-                }
-            }
-        }
-
-        if !sort.is_empty() && group_by.len() > 1 {
-            for gidx in 0..(group_by.len() - 1) {
-                let partition = (0..=gidx)
-                    .map(|i| format!("__ROW_PATH_{}__", i))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                let sub_groups = group_by[..=gidx]
-                    .iter()
-                    .map(|c| col_name(c))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                let groups = group_by.iter().map(|c| col_name(c)).collect::<Vec<_>>();
-                let grouping_fn = self.0.grouping_fn.as_deref().unwrap_or("GROUPING_ID");
-                window_clauses.push(format!(
-                    "__WINDOW_{}__ AS (PARTITION BY {}({}), {} ORDER BY {})",
-                    gidx,
-                    grouping_fn,
-                    sub_groups,
-                    partition,
-                    groups.join(", ")
-                ));
-            }
-        }
-
-        for flt in filter {
-            let term = Self::filter_term_to_sql(flt.term());
-            if let Some(term_lit) = term {
-                where_clauses.push(format!(
-                    "{} {} {}",
-                    col_name(flt.column()),
-                    flt.op(),
-                    term_lit
-                ));
-            }
-        }
-
-        let mut query = if !split_by.is_empty() {
-            format!("SELECT * FROM {}", table_id)
-        } else {
-            let select_clauses = generate_select_clauses();
-            format!("SELECT {} FROM {}", select_clauses.join(", "), table_id)
-        };
-
-        if !where_clauses.is_empty() {
-            query = format!("{} WHERE {}", query, where_clauses.join(" AND "));
-        }
-
-        if !split_by.is_empty() {
-            let groups = group_by.iter().map(|c| col_name(c)).collect::<Vec<_>>();
-            let group_aliases = group_by
-                .iter()
-                .enumerate()
-                .map(|(i, c)| format!("{} AS __ROW_PATH_{}__", col_name(c), i))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let pivot_on = split_by
-                .iter()
-                .map(|c| format!("\"{}\"", c))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let pivot_using = generate_select_clauses().join(", ");
-
-            query = format!(
-                "SELECT * EXCLUDE ({}) , {} FROM (PIVOT ({}) ON {} USING {} GROUP BY {})",
-                groups.join(", "),
-                group_aliases,
-                query,
-                pivot_on,
-                pivot_using,
-                groups.join(", ")
-            );
-        } else if !group_by.is_empty() {
-            let groups = group_by.iter().map(|c| col_name(c)).collect::<Vec<_>>();
-            query = format!("{} GROUP BY ROLLUP({})", query, groups.join(", "));
-        }
-
-        if !window_clauses.is_empty() {
-            query = format!("{} WINDOW {}", query, window_clauses.join(", "));
-        }
-
-        if !order_by_clauses.is_empty() {
-            query = format!("{} ORDER BY {}", query, order_by_clauses.join(", "));
-        }
-
+        let ctx = ViewQueryContext::new(self, table_id, config);
+        let query = ctx.build_query();
         let template = self.0.create_entity.as_deref().unwrap_or("TABLE");
         Ok(format!("CREATE {} {} AS ({})", template, view_id, query))
     }
@@ -392,7 +204,7 @@ impl GenericSQLVirtualServerModel {
         schema: &IndexMap<String, ColumnType>,
     ) -> GenericSQLResult<String> {
         let group_by = &config.group_by;
-        let split_by = &config.split_by;
+        let sort = &config.sort;
         let start_col = viewport.start_col.unwrap_or(0) as usize;
         let end_col = viewport.end_col.map(|x| x as usize);
         let start_row = viewport.start_row.unwrap_or(0);
@@ -403,19 +215,34 @@ impl GenericSQLVirtualServerModel {
             String::new()
         };
 
-        let data_columns: Vec<&String> = schema
+        let mut data_columns: Vec<&String> = schema
             .keys()
             .filter(|col_name| !col_name.starts_with("__"))
+            .collect();
+
+        let col_sort_dir = sort.iter().find_map(|Sort(_, dir)| match dir {
+            SortDir::ColAsc | SortDir::ColAscAbs => Some(true),
+            SortDir::ColDesc | SortDir::ColDescAbs => Some(false),
+            _ => None,
+        });
+
+        if let Some(ascending) = col_sort_dir {
+            if ascending {
+                data_columns.sort();
+            } else {
+                data_columns.sort_by(|a, b| b.cmp(a));
+            }
+        }
+
+        let data_columns: Vec<&String> = data_columns
+            .into_iter()
             .skip(start_col)
             .take(end_col.map(|e| e - start_col).unwrap_or(usize::MAX))
             .collect();
 
         let mut group_by_cols: Vec<String> = Vec::new();
         if !group_by.is_empty() {
-            if split_by.is_empty() {
-                group_by_cols.push("\"__GROUPING_ID__\"".to_string());
-            }
-
+            group_by_cols.push("\"__GROUPING_ID__\"".to_string());
             for idx in 0..group_by.len() {
                 group_by_cols.push(format!("\"__ROW_PATH_{}__\"", idx));
             }
@@ -458,21 +285,6 @@ impl GenericSQLVirtualServerModel {
         Ok(format!("SELECT COUNT(*) FROM {}", view_id))
     }
 
-    fn aggregate_to_string(agg: &Aggregate) -> String {
-        match agg {
-            Aggregate::SingleAggregate(name) => name.clone(),
-            Aggregate::MultiAggregate(name, _args) => name.clone(),
-        }
-    }
-
-    fn sort_dir_to_string(dir: &SortDir) -> &'static str {
-        match dir {
-            SortDir::None => "",
-            SortDir::Asc | SortDir::ColAsc | SortDir::AscAbs | SortDir::ColAscAbs => "ASC",
-            SortDir::Desc | SortDir::ColDesc | SortDir::DescAbs | SortDir::ColDescAbs => "DESC",
-        }
-    }
-
     fn filter_term_to_sql(term: &FilterTerm) -> Option<String> {
         match term {
             FilterTerm::Scalar(scalar) => Self::scalar_to_sql(scalar),
@@ -494,102 +306,5 @@ impl GenericSQLVirtualServerModel {
             Scalar::Float(f) => Some(f.to_string()),
             Scalar::String(s) => Some(format!("'{}'", s.replace('\'', "''"))),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_get_hosted_tables() {
-        let builder =
-            GenericSQLVirtualServerModel::new(GenericSQLVirtualServerModelArgs::default());
-        assert_eq!(builder.get_hosted_tables().unwrap(), "SHOW ALL TABLES");
-    }
-
-    #[test]
-    fn test_table_schema() {
-        let builder =
-            GenericSQLVirtualServerModel::new(GenericSQLVirtualServerModelArgs::default());
-        assert_eq!(
-            builder.table_schema("my_table").unwrap(),
-            "DESCRIBE my_table"
-        );
-    }
-
-    #[test]
-    fn test_table_size() {
-        let builder =
-            GenericSQLVirtualServerModel::new(GenericSQLVirtualServerModelArgs::default());
-        assert_eq!(
-            builder.table_size("my_table").unwrap(),
-            "SELECT COUNT(*) FROM my_table"
-        );
-    }
-
-    #[test]
-    fn test_view_delete() {
-        let builder =
-            GenericSQLVirtualServerModel::new(GenericSQLVirtualServerModelArgs::default());
-        assert_eq!(
-            builder.view_delete("my_view").unwrap(),
-            "DROP TABLE IF EXISTS my_view"
-        );
-    }
-
-    #[test]
-    fn test_table_make_view_simple() {
-        let builder =
-            GenericSQLVirtualServerModel::new(GenericSQLVirtualServerModelArgs::default());
-        let mut config = ViewConfig::default();
-        config.columns = vec![Some("col1".to_string()), Some("col2".to_string())];
-        let sql = builder
-            .table_make_view("source_table", "dest_view", &config)
-            .unwrap();
-
-        assert!(sql.starts_with("CREATE TABLE dest_view AS"));
-        assert!(sql.contains("\"col1\""));
-        assert!(sql.contains("\"col2\""));
-    }
-
-    #[test]
-    fn test_table_make_view_with_group_by() {
-        let builder =
-            GenericSQLVirtualServerModel::new(GenericSQLVirtualServerModelArgs::default());
-        let mut config = ViewConfig::default();
-        config.columns = vec![Some("value".to_string())];
-        config.group_by = vec!["category".to_string()];
-        let sql = builder
-            .table_make_view("source_table", "dest_view", &config)
-            .unwrap();
-
-        assert!(sql.contains("GROUP BY ROLLUP"));
-        assert!(sql.contains("__ROW_PATH_0__"));
-        assert!(sql.contains("__GROUPING_ID__"));
-    }
-
-    #[test]
-    fn test_view_get_data() {
-        let builder =
-            GenericSQLVirtualServerModel::new(GenericSQLVirtualServerModelArgs::default());
-        let config = ViewConfig::default();
-        let viewport = ViewPort {
-            start_row: Some(0),
-            end_row: Some(100),
-            start_col: Some(0),
-            end_col: Some(5),
-        };
-
-        let mut schema = IndexMap::new();
-        schema.insert("col1".to_string(), ColumnType::String);
-        schema.insert("col2".to_string(), ColumnType::Integer);
-        let sql = builder
-            .view_get_data("my_view", &config, &viewport, &schema)
-            .unwrap();
-
-        assert!(sql.contains("SELECT"));
-        assert!(sql.contains("FROM my_view"));
-        assert!(sql.contains("LIMIT 100 OFFSET 0"));
     }
 }
